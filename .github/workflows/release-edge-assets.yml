@@ -1,0 +1,107 @@
+name: Release edge assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build edge assets for
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: freebsd
+            goarch: amd64
+            ext: so
+            zig_target: x86_64-freebsd
+          - goos: windows
+            goarch: arm64
+            ext: dll
+            zig_target: aarch64-windows-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag }}"
+          version="${version#v}"
+          mkdir -p dist
+          export CC="zig cc -target ${{ matrix.zig_target }}"
+          export CXX="zig c++ -target ${{ matrix.zig_target }}"
+          CGO_ENABLED=1 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -buildmode=c-shared -o "dist/codex-invite.${{ matrix.ext }}" .
+          rm -f dist/codex-invite.h
+          (
+            cd dist
+            zip -q "codex-invite_${version}_${{ matrix.goos }}_${{ matrix.goarch }}.zip" \
+              "codex-invite.${{ matrix.ext }}"
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-invite-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish edge release assets
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Download existing release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "codex-invite_${version}_*.zip" \
+            --dir dist
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum codex-invite_*.zip | sort -k 2 > checksums.txt
+          cat checksums.txt
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" dist/codex-invite_*.zip dist/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
