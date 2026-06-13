@@ -39,7 +39,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -150,13 +149,18 @@ type accountsResponse struct {
 }
 
 type inviteRequest struct {
-	AuthIndex        string   `json:"auth_index,omitempty"`
-	AuthName         string   `json:"auth_name,omitempty"`
-	Emails           []string `json:"emails,omitempty"`
-	EmailsText       string   `json:"emails_text,omitempty"`
-	ReferralKey      string   `json:"referral_key,omitempty"`
-	Cookie           string   `json:"cookie,omitempty"`
-	ManagementOrigin string   `json:"management_origin,omitempty"`
+	AuthIndex           string   `json:"auth_index,omitempty"`
+	AuthName            string   `json:"auth_name,omitempty"`
+	Emails              []string `json:"emails,omitempty"`
+	EmailsText          string   `json:"emails_text,omitempty"`
+	ReferralKey         string   `json:"referral_key,omitempty"`
+	BaseURL             string   `json:"base_url,omitempty"`
+	Language            string   `json:"language,omitempty"`
+	Originator          string   `json:"originator,omitempty"`
+	UserAgent           string   `json:"user_agent,omitempty"`
+	Cookie              string   `json:"cookie,omitempty"`
+	MaxEmailsPerRequest int      `json:"max_emails_per_request,omitempty"`
+	ManagementOrigin    string   `json:"management_origin,omitempty"`
 }
 
 type inviteLink struct {
@@ -414,7 +418,19 @@ func handleInvite(req pluginapi.ManagementRequest) pluginapi.ManagementResponse 
 	}
 
 	cfg := currentConfig()
-	emails, errEmails := collectEmails(payload, cfg.MaxEmailsPerRequest)
+	requestCfg := mergeConfig(cfg, pluginConfig{
+		BaseURL:    payload.BaseURL,
+		Language:   payload.Language,
+		Originator: payload.Originator,
+		UserAgent:  payload.UserAgent,
+	})
+	requestCfg = normalizeConfig(requestCfg)
+
+	maxEmails := cfg.MaxEmailsPerRequest
+	if payload.MaxEmailsPerRequest > 0 && payload.MaxEmailsPerRequest < maxEmails {
+		maxEmails = payload.MaxEmailsPerRequest
+	}
+	emails, errEmails := collectEmails(payload, maxEmails)
 	if errEmails != nil {
 		return jsonResponse(http.StatusBadRequest, map[string]any{"error": errEmails.Error()})
 	}
@@ -441,12 +457,12 @@ func handleInvite(req pluginapi.ManagementRequest) pluginapi.ManagementResponse 
 
 	referralKey := strings.TrimSpace(payload.ReferralKey)
 	if referralKey == "" {
-		referralKey = cfg.ReferralKey
+		referralKey = requestCfg.ReferralKey
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	result, errSend := sendInvite(ctx, cfg, credential, account, emails, referralKey, strings.TrimSpace(payload.Cookie))
+	result, errSend := sendInvite(ctx, requestCfg, credential, account, emails, referralKey, strings.TrimSpace(payload.Cookie))
 	if errSend != nil {
 		return jsonResponse(statusForError(errSend), map[string]any{"error": errSend.Error()})
 	}
@@ -920,8 +936,18 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 }
 
 func renderInvitePage(cfg pluginConfig) string {
-	referralKey := html.EscapeString(cfg.ReferralKey)
-	maxEmails := cfg.MaxEmailsPerRequest
+	defaults := map[string]any{
+		"referralKey": cfg.ReferralKey,
+		"baseURL":     cfg.BaseURL,
+		"language":    cfg.Language,
+		"originator":  cfg.Originator,
+		"userAgent":   cfg.UserAgent,
+		"maxEmails":   cfg.MaxEmailsPerRequest,
+	}
+	rawDefaults, errMarshal := json.Marshal(defaults)
+	if errMarshal != nil {
+		rawDefaults = []byte(`{"referralKey":"codex_referral_persistent_invite","baseURL":"https://chatgpt.com","language":"zh-CN","originator":"Codex Desktop","userAgent":"","maxEmails":10}`)
+	}
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -929,107 +955,382 @@ func renderInvitePage(cfg pluginConfig) string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Codex Invite</title>
   <style>
-    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: Canvas;
+      color: CanvasText;
+      letter-spacing: 0;
+    }
+    * { box-sizing: border-box; }
     body { margin: 0; background: Canvas; color: CanvasText; }
-    main { max-width: 980px; margin: 0 auto; padding: 28px; }
-    h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: 0; }
-    p { margin: 0; color: color-mix(in srgb, CanvasText 68%, Canvas 32%); }
-    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 22px; }
-    .panel { border: 1px solid color-mix(in srgb, CanvasText 14%, Canvas 86%); border-radius: 8px; padding: 16px; background: color-mix(in srgb, Canvas 96%, CanvasText 4%); }
-    label { display: grid; gap: 7px; font-size: 13px; font-weight: 600; margin-bottom: 13px; }
-    input, select, textarea, button { font: inherit; box-sizing: border-box; width: 100%; }
-    input, select, textarea { border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas 82%); border-radius: 6px; padding: 9px 10px; background: Canvas; color: CanvasText; }
-    textarea { min-height: 118px; resize: vertical; }
-    button { border: 0; border-radius: 6px; padding: 10px 12px; background: #0f766e; color: #fff; font-weight: 700; cursor: pointer; }
-    button:disabled { opacity: .55; cursor: not-allowed; }
-    .row { display: flex; gap: 10px; align-items: center; }
-    .row button { width: auto; min-width: 150px; }
-    .muted { color: color-mix(in srgb, CanvasText 62%, Canvas 38%); font-size: 13px; }
-    .status { margin-top: 14px; white-space: pre-wrap; word-break: break-word; border-radius: 6px; padding: 12px; background: color-mix(in srgb, CanvasText 8%, Canvas 92%); }
-    .status.error { background: color-mix(in srgb, #dc2626 14%, Canvas 86%); }
-    .links { display: grid; gap: 8px; margin-top: 10px; }
-    .links a { color: #0f766e; overflow-wrap: anywhere; }
-    @media (max-width: 760px) { main { padding: 18px; } .grid { grid-template-columns: 1fr; } .row { display: grid; } .row button { width: 100%; } }
+    main { max-width: 1120px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; }
+    h2 { margin: 0 0 14px; font-size: 15px; font-weight: 720; letter-spacing: 0; }
+    label { display: grid; gap: 7px; font-size: 13px; font-weight: 650; min-width: 0; }
+    input, select, textarea, button { font: inherit; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas 82%);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: Canvas;
+      color: CanvasText;
+    }
+    textarea { min-height: 116px; resize: vertical; line-height: 1.45; }
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 9px 12px;
+      background: #0f766e;
+      color: #fff;
+      font-weight: 720;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button.secondary { background: color-mix(in srgb, CanvasText 10%, Canvas 90%); color: CanvasText; }
+    button.warning { background: #b45309; }
+    button:disabled { opacity: .54; cursor: not-allowed; }
+    .layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .stack { display: grid; gap: 16px; }
+    .panel {
+      border: 1px solid color-mix(in srgb, CanvasText 14%, Canvas 86%);
+      border-radius: 8px;
+      padding: 16px;
+      background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
+    }
+    .fields { display: grid; gap: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+    .actions button { width: auto; }
+    .inline { display: flex; gap: 9px; align-items: center; }
+    .inline input[type="checkbox"] { width: auto; margin: 0; }
+    .metric {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 6px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      background: color-mix(in srgb, #2563eb 12%, Canvas 88%);
+      color: color-mix(in srgb, #2563eb 72%, CanvasText 28%);
+    }
+    .muted { color: color-mix(in srgb, CanvasText 62%, Canvas 38%); font-size: 12px; font-weight: 520; }
+    .status {
+      margin-top: 16px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border-radius: 8px;
+      padding: 13px;
+      background: color-mix(in srgb, #2563eb 10%, Canvas 90%);
+      border: 1px solid color-mix(in srgb, #2563eb 18%, Canvas 82%);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .status.error {
+      background: color-mix(in srgb, #dc2626 12%, Canvas 88%);
+      border-color: color-mix(in srgb, #dc2626 24%, Canvas 76%);
+    }
+    .links { display: grid; gap: 8px; margin-top: 12px; }
+    .links a {
+      color: #0f766e;
+      overflow-wrap: anywhere;
+      border: 1px solid color-mix(in srgb, CanvasText 12%, Canvas 88%);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: Canvas;
+      text-decoration: none;
+    }
+    @media (max-width: 860px) {
+      main { padding: 16px; }
+      header { display: grid; align-items: start; }
+      .layout, .grid { grid-template-columns: 1fr; }
+      .actions, .inline { display: grid; }
+      .actions button { width: 100%; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <h1>Codex Invite</h1>
-    <p>Use a CPA Codex credential to send referral invite emails.</p>
-    <div class="grid">
+    <header>
+      <h1>Codex Invite</h1>
+      <span class="metric" id="emailCount">0 emails</span>
+    </header>
+    <div class="layout">
+      <div class="stack">
+        <section class="panel">
+          <h2>Connection</h2>
+          <div class="fields">
+            <label>CPA management key
+              <input id="managementKey" type="password" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="actions">
+              <button id="loadAccounts" type="button">Load accounts</button>
+              <button id="loadPluginConfig" type="button" class="secondary">Load config</button>
+            </div>
+            <label>Codex account
+              <select id="account"></select>
+            </label>
+            <span id="accountCount" class="muted"></span>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Settings</h2>
+          <div class="fields">
+            <label>Referral key
+              <input id="referralKey" spellcheck="false">
+            </label>
+            <label>ChatGPT base URL
+              <input id="baseUrl" spellcheck="false">
+            </label>
+            <div class="grid">
+              <label>Language
+                <input id="language" spellcheck="false">
+              </label>
+              <label>Originator
+                <input id="originator" spellcheck="false">
+              </label>
+            </div>
+            <label>User-Agent
+              <input id="userAgent" spellcheck="false">
+            </label>
+            <label>Max emails per request
+              <input id="maxEmails" type="number" min="1" max="50" step="1">
+            </label>
+            <label>Cookie
+              <textarea id="cookie" autocomplete="off" spellcheck="false"></textarea>
+            </label>
+            <label class="inline">
+              <input id="persistCookie" type="checkbox">
+              <span>Update saved cookie</span>
+            </label>
+            <div class="actions">
+              <button id="savePluginConfig" type="button">Save config</button>
+              <button id="saveLocal" type="button" class="secondary">Save local</button>
+              <button id="resetLocal" type="button" class="secondary">Reset local</button>
+            </div>
+          </div>
+        </section>
+      </div>
       <section class="panel">
-        <label>CPA management key
-          <input id="managementKey" type="password" autocomplete="off" spellcheck="false">
-        </label>
-        <div class="row">
-          <button id="loadAccounts" type="button">Load accounts</button>
-          <span id="accountCount" class="muted"></span>
+        <h2>Invite</h2>
+        <div class="fields">
+          <label>Email addresses
+            <textarea id="emails" spellcheck="false" placeholder="name@example.com&#10;teammate@example.com"></textarea>
+          </label>
+          <div class="actions">
+            <button id="send" type="button">Send invites</button>
+            <button id="clearResult" type="button" class="secondary">Clear result</button>
+          </div>
         </div>
-        <label style="margin-top:13px">Codex account
-          <select id="account"></select>
-        </label>
-        <label>Referral key
-          <input id="referralKey" value="` + referralKey + `" spellcheck="false">
-        </label>
-        <label>Cloudflare cookie
-          <textarea id="cookie" autocomplete="off" spellcheck="false" placeholder="Optional"></textarea>
-        </label>
-      </section>
-      <section class="panel">
-        <label>Email addresses
-          <textarea id="emails" spellcheck="false" placeholder="name@example.com&#10;teammate@example.com"></textarea>
-        </label>
-        <button id="send" type="button">Send invites</button>
-        <p class="muted" style="margin-top:10px">Max ` + fmt.Sprintf("%d", maxEmails) + ` email addresses per request.</p>
       </section>
     </div>
     <section id="status" class="status" hidden></section>
     <section id="links" class="links"></section>
   </main>
   <script>
+    const PLUGIN_ID = 'codex-invite';
+    const DEFAULTS = ` + string(rawDefaults) + `;
+    const STORAGE_KEY = 'codex-invite-settings-v2';
     const origin = window.location.origin;
-    const accountSelect = document.getElementById('account');
-    const statusBox = document.getElementById('status');
-    const linksBox = document.getElementById('links');
-    const keyInput = document.getElementById('managementKey');
-    const loadButton = document.getElementById('loadAccounts');
-    const sendButton = document.getElementById('send');
-    const accountCount = document.getElementById('accountCount');
+    const state = { accounts: [] };
 
-    function setStatus(message, error = false) {
+    function field(id) {
+      return document.getElementById(id);
+    }
+
+    const accountSelect = field('account');
+    const statusBox = field('status');
+    const linksBox = field('links');
+    const keyInput = field('managementKey');
+    const loadButton = field('loadAccounts');
+    const loadConfigButton = field('loadPluginConfig');
+    const saveConfigButton = field('savePluginConfig');
+    const saveLocalButton = field('saveLocal');
+    const resetLocalButton = field('resetLocal');
+    const sendButton = field('send');
+    const clearResultButton = field('clearResult');
+    const accountCount = field('accountCount');
+    const emailCount = field('emailCount');
+
+    function setStatus(message, error) {
       statusBox.hidden = false;
       statusBox.textContent = message;
       statusBox.className = 'status' + (error ? ' error' : '');
     }
 
+    function clearResult() {
+      statusBox.hidden = true;
+      statusBox.textContent = '';
+      linksBox.innerHTML = '';
+    }
+
+    function formatError(data, fallback) {
+      if (!data) return fallback;
+      if (typeof data === 'string') return data;
+      return data.message || data.error || fallback;
+    }
+
+    async function readJSON(response) {
+      const text = await response.text();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch (error) {
+        return { error: text };
+      }
+    }
+
     function authHeaders() {
       const key = keyInput.value.trim();
       if (!key) throw new Error('CPA management key is required');
+      const authorization = key.toLowerCase().startsWith('bearer ') ? key : 'Bearer ' + key;
       return {
-        'authorization': 'Bearer ' + key,
-        'x-codex-invite-origin': origin
+        'Authorization': authorization,
+        'X-Codex-Invite-Origin': origin
       };
+    }
+
+    function numericMaxEmails() {
+      const value = Number.parseInt(field('maxEmails').value, 10);
+      if (!Number.isFinite(value) || value < 1) return DEFAULTS.maxEmails || 10;
+      return Math.min(value, 50);
+    }
+
+    function getSettings() {
+      return {
+        referral_key: field('referralKey').value.trim(),
+        base_url: field('baseUrl').value.trim(),
+        language: field('language').value.trim(),
+        originator: field('originator').value.trim(),
+        user_agent: field('userAgent').value.trim(),
+        max_emails_per_request: numericMaxEmails()
+      };
+    }
+
+    function settingsForStorage() {
+      const settings = getSettings();
+      return {
+        referralKey: settings.referral_key,
+        baseURL: settings.base_url,
+        language: settings.language,
+        originator: settings.originator,
+        userAgent: settings.user_agent,
+        maxEmails: settings.max_emails_per_request
+      };
+    }
+
+    function applySettings(raw) {
+      const data = raw || {};
+      field('referralKey').value = data.referral_key || data.referralKey || DEFAULTS.referralKey || '';
+      field('baseUrl').value = data.base_url || data.baseURL || DEFAULTS.baseURL || 'https://chatgpt.com';
+      field('language').value = data.language || DEFAULTS.language || 'zh-CN';
+      field('originator').value = data.originator || DEFAULTS.originator || 'Codex Desktop';
+      field('userAgent').value = data.user_agent || data.userAgent || DEFAULTS.userAgent || '';
+      field('maxEmails').value = data.max_emails_per_request || data.maxEmails || DEFAULTS.maxEmails || 10;
+    }
+
+    function loadLocalSettings() {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          applySettings({ ...DEFAULTS, ...JSON.parse(raw) });
+          return;
+        }
+      } catch (error) {
+        setStatus('Failed to load local settings: ' + (error.message || String(error)), true);
+      }
+      applySettings(DEFAULTS);
+    }
+
+    function saveLocalSettings() {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settingsForStorage()));
+      setStatus('Local settings saved.');
+    }
+
+    function resetLocalSettings() {
+      window.localStorage.removeItem(STORAGE_KEY);
+      applySettings(DEFAULTS);
+      field('persistCookie').checked = false;
+      setStatus('Local settings reset.');
+      updateEmailCount();
+    }
+
+    function splitEmails(text) {
+      return text.split(/[,\s;]+/).map((item) => item.trim()).filter(Boolean);
+    }
+
+    function updateEmailCount() {
+      const count = splitEmails(field('emails').value).length;
+      emailCount.textContent = count + (count === 1 ? ' email' : ' emails');
+      sendButton.disabled = count === 0 || !accountSelect.selectedOptions.length;
     }
 
     function renderAccounts(accounts) {
       accountSelect.innerHTML = '';
-      for (const account of accounts) {
+      state.accounts = Array.isArray(accounts) ? accounts : [];
+      for (const account of state.accounts) {
         const option = document.createElement('option');
         option.value = account.auth_index || account.name;
         option.dataset.name = account.name;
-        option.textContent = [account.email, account.account, account.name].filter(Boolean).join(' - ');
+        option.textContent = [account.email, account.account, account.name].filter(Boolean).join(' - ') || account.name;
         accountSelect.appendChild(option);
       }
-      accountCount.textContent = accounts.length ? accounts.length + ' available' : 'none';
+      accountCount.textContent = state.accounts.length ? state.accounts.length + ' accounts loaded' : 'No Codex accounts loaded';
+      updateEmailCount();
+    }
+
+    async function loadPluginConfig() {
+      clearResult();
+      loadConfigButton.disabled = true;
+      try {
+        const response = await fetch('/v0/management/plugins/' + PLUGIN_ID + '/config', { headers: authHeaders() });
+        const data = await readJSON(response);
+        if (!response.ok) throw new Error(formatError(data, 'Failed to load plugin config'));
+        applySettings({ ...DEFAULTS, ...data });
+        field('persistCookie').checked = false;
+        setStatus(data.cookie ? 'Config loaded. Saved cookie is hidden.' : 'Config loaded.');
+        updateEmailCount();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        loadConfigButton.disabled = false;
+      }
+    }
+
+    async function savePluginConfig() {
+      clearResult();
+      saveConfigButton.disabled = true;
+      try {
+        const payload = getSettings();
+        if (field('persistCookie').checked) {
+          const cookie = field('cookie').value.trim();
+          payload.cookie = cookie || null;
+        }
+        const response = await fetch('/v0/management/plugins/' + PLUGIN_ID + '/config', {
+          method: 'PATCH',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await readJSON(response);
+        if (!response.ok) throw new Error(formatError(data, 'Failed to save plugin config'));
+        setStatus('Plugin config saved.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        saveConfigButton.disabled = false;
+      }
     }
 
     async function loadAccounts() {
-      linksBox.innerHTML = '';
+      clearResult();
       loadButton.disabled = true;
       try {
         const response = await fetch('/v0/management/codex-invite/accounts', { headers: authHeaders() });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Failed to load accounts');
+        const data = await readJSON(response);
+        if (!response.ok) throw new Error(formatError(data, 'Failed to load accounts'));
         renderAccounts(data.accounts || []);
         setStatus('Accounts loaded.');
       } catch (error) {
@@ -1040,26 +1341,32 @@ func renderInvitePage(cfg pluginConfig) string {
     }
 
     async function sendInvites() {
-      linksBox.innerHTML = '';
+      clearResult();
       sendButton.disabled = true;
       try {
         const selected = accountSelect.selectedOptions[0];
         if (!selected) throw new Error('Select a Codex account');
+        const settings = getSettings();
         const payload = {
           auth_index: selected.value,
           auth_name: selected.dataset.name || '',
-          emails_text: document.getElementById('emails').value,
-          referral_key: document.getElementById('referralKey').value,
-          cookie: document.getElementById('cookie').value,
+          emails_text: field('emails').value,
+          referral_key: settings.referral_key,
+          base_url: settings.base_url,
+          language: settings.language,
+          originator: settings.originator,
+          user_agent: settings.user_agent,
+          max_emails_per_request: settings.max_emails_per_request,
+          cookie: field('cookie').value,
           management_origin: origin
         };
         const response = await fetch('/v0/management/codex-invite/invite', {
           method: 'POST',
-          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Invite request failed');
+        const data = await readJSON(response);
+        if (!response.ok) throw new Error(formatError(data, 'Invite request failed'));
         const ok = data.ok === true;
         setStatus(JSON.stringify(data, null, 2), !ok);
         for (const invite of data.invites || []) {
@@ -1074,12 +1381,22 @@ func renderInvitePage(cfg pluginConfig) string {
       } catch (error) {
         setStatus(error.message || String(error), true);
       } finally {
-        sendButton.disabled = false;
+        updateEmailCount();
       }
     }
 
     loadButton.addEventListener('click', loadAccounts);
+    loadConfigButton.addEventListener('click', loadPluginConfig);
+    saveConfigButton.addEventListener('click', savePluginConfig);
+    saveLocalButton.addEventListener('click', saveLocalSettings);
+    resetLocalButton.addEventListener('click', resetLocalSettings);
     sendButton.addEventListener('click', sendInvites);
+    clearResultButton.addEventListener('click', clearResult);
+    field('emails').addEventListener('input', updateEmailCount);
+    accountSelect.addEventListener('change', updateEmailCount);
+    loadLocalSettings();
+    renderAccounts([]);
+    updateEmailCount();
   </script>
 </body>
 </html>`

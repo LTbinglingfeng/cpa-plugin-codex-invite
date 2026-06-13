@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -77,5 +78,18 @@ func TestParseCodexCredentialTokenDataFallback(t *testing.T) {
 	}
 	if credential.AccessToken != "access-2" || credential.AccountID != "account-2" || credential.Email != "fallback@example.com" {
 		t.Fatalf("credential = %#v", credential)
+	}
+}
+
+func TestRenderInvitePageEscapesDefaults(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ReferralKey = `</script><img src=x onerror=alert(1)>`
+
+	page := renderInvitePage(cfg)
+	if strings.Contains(page, cfg.ReferralKey) {
+		t.Fatalf("page contains unescaped referral key")
+	}
+	if !strings.Contains(page, `\u003c/script\u003e`) {
+		t.Fatalf("page does not contain JSON-escaped referral key")
 	}
 }
