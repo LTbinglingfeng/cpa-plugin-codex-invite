@@ -14,6 +14,9 @@ POST https://chatgpt.com/backend-api/wham/referrals/invite
 
 ## Configuration
 
+The plugin does not expose invite fields in the Management Center plugin
+configuration form. Plugin config is only used to enable the plugin:
+
 ```yaml
 plugins:
   enabled: true
@@ -21,19 +24,7 @@ plugins:
     codex-invite:
       enabled: true
       priority: 1
-      referral_key: "codex_referral_persistent_invite"
-      max_emails_per_request: 10
 ```
-
-Supported plugin config fields:
-
-- `referral_key`: invite referral key. Defaults to `codex_referral_persistent_invite`.
-- `max_emails_per_request`: safety limit for one send request. Defaults to `10`.
-- `base_url`: ChatGPT base URL. Defaults to `https://chatgpt.com`.
-- `language`: `oai-language` header. Defaults to `zh-CN`.
-- `originator`: `originator` header. Defaults to `Codex Desktop`.
-- `user_agent`: upstream user agent. Defaults to a Codex Desktop-like browser UA.
-- `cookie`: optional upstream Cookie header. Prefer entering this per request only when required.
 
 ## Resource Page
 
@@ -49,13 +40,11 @@ It provides:
 - Codex credential loading and account selection from CPA auth files.
 - Invite settings for referral key, ChatGPT base URL, language, originator, user agent, request email limit, and optional Cookie.
 - Local browser settings for non-secret fields.
-- Plugin config loading and saving through `GET/PATCH /v0/management/plugins/codex-invite/config`.
 - Invite execution through `POST /v0/management/codex-invite/invite`.
 
 The page does not store the CPA management key or Cookie in `localStorage`.
-Saving the Cookie into plugin config only happens when `Update saved cookie` is
-checked; loading plugin config never writes the saved Cookie back into the
-visible textarea.
+Invite details and account choice are entered in this custom page, not in the
+plugin configuration form.
 
 ## Build
 

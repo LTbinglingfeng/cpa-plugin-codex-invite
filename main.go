@@ -364,14 +364,6 @@ func pluginRegistration() registration {
 			Version:          pluginVersion,
 			Author:           "router-for-me",
 			GitHubRepository: "https://github.com/router-for-me/cpa-plugin-codex-invite",
-			ConfigFields: []pluginapi.ConfigField{
-				{Name: "referral_key", Type: pluginapi.ConfigFieldTypeString, Description: "ChatGPT referral key used when sending Codex invites."},
-				{Name: "max_emails_per_request", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum number of email addresses accepted by one invite request."},
-				{Name: "base_url", Type: pluginapi.ConfigFieldTypeString, Description: "ChatGPT base URL."},
-				{Name: "language", Type: pluginapi.ConfigFieldTypeString, Description: "oai-language header value."},
-				{Name: "originator", Type: pluginapi.ConfigFieldTypeString, Description: "originator header value."},
-				{Name: "user_agent", Type: pluginapi.ConfigFieldTypeString, Description: "Upstream User-Agent header value."},
-			},
 		},
 		Capabilities: registrationCapabilities{ManagementAPI: true},
 	}
@@ -1068,7 +1060,6 @@ func renderInvitePage(cfg pluginConfig) string {
             </label>
             <div class="actions">
               <button id="loadAccounts" type="button">Load accounts</button>
-              <button id="loadPluginConfig" type="button" class="secondary">Load config</button>
             </div>
             <label>Codex account
               <select id="account"></select>
@@ -1102,12 +1093,7 @@ func renderInvitePage(cfg pluginConfig) string {
             <label>Cookie
               <textarea id="cookie" autocomplete="off" spellcheck="false"></textarea>
             </label>
-            <label class="inline">
-              <input id="persistCookie" type="checkbox">
-              <span>Update saved cookie</span>
-            </label>
             <div class="actions">
-              <button id="savePluginConfig" type="button">Save config</button>
               <button id="saveLocal" type="button" class="secondary">Save local</button>
               <button id="resetLocal" type="button" class="secondary">Reset local</button>
             </div>
@@ -1131,7 +1117,6 @@ func renderInvitePage(cfg pluginConfig) string {
     <section id="links" class="links"></section>
   </main>
   <script>
-    const PLUGIN_ID = 'codex-invite';
     const DEFAULTS = ` + string(rawDefaults) + `;
     const STORAGE_KEY = 'codex-invite-settings-v2';
     const origin = window.location.origin;
@@ -1146,8 +1131,6 @@ func renderInvitePage(cfg pluginConfig) string {
     const linksBox = field('links');
     const keyInput = field('managementKey');
     const loadButton = field('loadAccounts');
-    const loadConfigButton = field('loadPluginConfig');
-    const saveConfigButton = field('savePluginConfig');
     const saveLocalButton = field('saveLocal');
     const resetLocalButton = field('resetLocal');
     const sendButton = field('send');
@@ -1253,7 +1236,6 @@ func renderInvitePage(cfg pluginConfig) string {
     function resetLocalSettings() {
       window.localStorage.removeItem(STORAGE_KEY);
       applySettings(DEFAULTS);
-      field('persistCookie').checked = false;
       setStatus('Local settings reset.');
       updateEmailCount();
     }
@@ -1280,48 +1262,6 @@ func renderInvitePage(cfg pluginConfig) string {
       }
       accountCount.textContent = state.accounts.length ? state.accounts.length + ' accounts loaded' : 'No Codex accounts loaded';
       updateEmailCount();
-    }
-
-    async function loadPluginConfig() {
-      clearResult();
-      loadConfigButton.disabled = true;
-      try {
-        const response = await fetch('/v0/management/plugins/' + PLUGIN_ID + '/config', { headers: authHeaders() });
-        const data = await readJSON(response);
-        if (!response.ok) throw new Error(formatError(data, 'Failed to load plugin config'));
-        applySettings({ ...DEFAULTS, ...data });
-        field('persistCookie').checked = false;
-        setStatus(data.cookie ? 'Config loaded. Saved cookie is hidden.' : 'Config loaded.');
-        updateEmailCount();
-      } catch (error) {
-        setStatus(error.message || String(error), true);
-      } finally {
-        loadConfigButton.disabled = false;
-      }
-    }
-
-    async function savePluginConfig() {
-      clearResult();
-      saveConfigButton.disabled = true;
-      try {
-        const payload = getSettings();
-        if (field('persistCookie').checked) {
-          const cookie = field('cookie').value.trim();
-          payload.cookie = cookie || null;
-        }
-        const response = await fetch('/v0/management/plugins/' + PLUGIN_ID + '/config', {
-          method: 'PATCH',
-          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await readJSON(response);
-        if (!response.ok) throw new Error(formatError(data, 'Failed to save plugin config'));
-        setStatus('Plugin config saved.');
-      } catch (error) {
-        setStatus(error.message || String(error), true);
-      } finally {
-        saveConfigButton.disabled = false;
-      }
     }
 
     async function loadAccounts() {
@@ -1386,8 +1326,6 @@ func renderInvitePage(cfg pluginConfig) string {
     }
 
     loadButton.addEventListener('click', loadAccounts);
-    loadConfigButton.addEventListener('click', loadPluginConfig);
-    saveConfigButton.addEventListener('click', savePluginConfig);
     saveLocalButton.addEventListener('click', saveLocalSettings);
     resetLocalButton.addEventListener('click', resetLocalSettings);
     sendButton.addEventListener('click', sendInvites);

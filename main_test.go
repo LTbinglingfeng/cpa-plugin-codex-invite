@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 )
 
 func TestCollectEmailsSplitsDedupesAndValidates(t *testing.T) {
@@ -91,5 +95,48 @@ func TestRenderInvitePageEscapesDefaults(t *testing.T) {
 	}
 	if !strings.Contains(page, `\u003c/script\u003e`) {
 		t.Fatalf("page does not contain JSON-escaped referral key")
+	}
+}
+
+func TestRegistrationUsesCustomPageInsteadOfConfigFields(t *testing.T) {
+	reg := pluginRegistration()
+	if len(reg.Metadata.ConfigFields) != 0 {
+		t.Fatalf("config fields = %#v, want none", reg.Metadata.ConfigFields)
+	}
+
+	raw, err := handleMethod(pluginabi.MethodManagementRegister, nil)
+	if err != nil {
+		t.Fatalf("handleMethod(MethodManagementRegister) error = %v", err)
+	}
+	var env envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if !env.OK {
+		t.Fatalf("envelope ok = false, error = %#v", env.Error)
+	}
+
+	var registration managementRegistrationResponse
+	if err := json.Unmarshal(env.Result, &registration); err != nil {
+		t.Fatalf("decode management registration: %v", err)
+	}
+	if len(registration.Resources) != 1 {
+		t.Fatalf("resources = %#v, want one custom page", registration.Resources)
+	}
+	if got := registration.Resources[0]; got.Path != "/invite" || got.Menu != "Codex Invite" {
+		t.Fatalf("resource = %#v, want /invite Codex Invite", got)
+	}
+
+	routes := map[string]bool{}
+	for _, route := range registration.Routes {
+		routes[route.Method+" "+route.Path] = true
+	}
+	for _, want := range []string{
+		http.MethodGet + " /codex-invite/accounts",
+		http.MethodPost + " /codex-invite/invite",
+	} {
+		if !routes[want] {
+			t.Fatalf("registered routes = %#v, missing %s", registration.Routes, want)
+		}
 	}
 }
