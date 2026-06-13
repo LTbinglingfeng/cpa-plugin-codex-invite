@@ -198,13 +198,26 @@ func TestRenderInvitePageCollapsesSettingsAndIncludesI18n(t *testing.T) {
 	if strings.Contains(page, `<details class="panel collapsible" id="settingsPanel" open>`) {
 		t.Fatalf("settings details card is open by default")
 	}
+	proxyInput := `<input id="proxyUrl" spellcheck="false" placeholder="http://127.0.0.1:7890">`
+	inviteStart := strings.Index(page, `<h2 data-i18n="invite.title">Invite</h2>`)
+	proxyIndex := strings.Index(page, proxyInput)
+	settingsEnd := strings.Index(page, `</details>`)
+	if proxyIndex == -1 {
+		t.Fatalf("page is missing visible proxy URL input")
+	}
+	if inviteStart == -1 || proxyIndex < inviteStart {
+		t.Fatalf("proxy URL input is not in the visible Invite panel")
+	}
+	if settingsEnd != -1 && proxyIndex < settingsEnd {
+		t.Fatalf("proxy URL input is still inside the collapsed Settings panel")
+	}
 	for _, want := range []string{
 		`id="localeSelect"`,
 		`data-i18n="settings.title"`,
 		`'settings.title': 'Settings'`,
 		`'settings.title': '设置'`,
-		`'settings.proxyUrl': 'Proxy URL'`,
-		`'settings.proxyUrl': '代理地址'`,
+		`'invite.proxyUrl': 'Proxy URL'`,
+		`'invite.proxyUrl': '代理地址'`,
 		`'invite.send': 'Send invites'`,
 		`'invite.send': '发送邀请'`,
 	} {

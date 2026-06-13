@@ -76,7 +76,7 @@ const (
 	upstreamBodyLimit       int64 = 1 << 20
 )
 
-var pluginVersion = "0.1.3"
+var pluginVersion = "0.1.4"
 
 var (
 	activeConfig atomic.Value
@@ -1162,9 +1162,6 @@ func renderInvitePage(cfg pluginConfig) string {
             <label><span data-i18n="settings.baseUrl">ChatGPT base URL</span>
               <input id="baseUrl" spellcheck="false">
             </label>
-            <label><span data-i18n="settings.proxyUrl">Proxy URL</span>
-              <input id="proxyUrl" spellcheck="false" placeholder="http://127.0.0.1:7890">
-            </label>
             <div class="grid">
               <label><span data-i18n="settings.upstreamLanguage">Language</span>
                 <input id="language" spellcheck="false">
@@ -1192,6 +1189,9 @@ func renderInvitePage(cfg pluginConfig) string {
       <section class="panel">
         <h2 data-i18n="invite.title">Invite</h2>
         <div class="fields">
+          <label><span data-i18n="invite.proxyUrl">Proxy URL</span>
+            <input id="proxyUrl" spellcheck="false" placeholder="http://127.0.0.1:7890">
+          </label>
           <label><span data-i18n="invite.emails">Email addresses</span>
             <textarea id="emails" spellcheck="false" data-i18n-placeholder="invite.emailsPlaceholder" placeholder="name@example.com&#10;teammate@example.com"></textarea>
           </label>
@@ -1221,7 +1221,6 @@ func renderInvitePage(cfg pluginConfig) string {
         'settings.summary': 'Defaults work for most cases',
         'settings.referralKey': 'Referral key',
         'settings.baseUrl': 'ChatGPT base URL',
-        'settings.proxyUrl': 'Proxy URL',
         'settings.upstreamLanguage': 'Language',
         'settings.originator': 'Originator',
         'settings.userAgent': 'User-Agent',
@@ -1230,6 +1229,7 @@ func renderInvitePage(cfg pluginConfig) string {
         'settings.saveLocal': 'Save local',
         'settings.resetLocal': 'Reset local',
         'invite.title': 'Invite',
+        'invite.proxyUrl': 'Proxy URL',
         'invite.emails': 'Email addresses',
         'invite.emailsPlaceholder': 'name@example.com\nteammate@example.com',
         'invite.send': 'Send invites',
@@ -1258,7 +1258,6 @@ func renderInvitePage(cfg pluginConfig) string {
         'settings.summary': '默认值通常可以直接使用',
         'settings.referralKey': '邀请 referral key',
         'settings.baseUrl': 'ChatGPT 基础地址',
-        'settings.proxyUrl': '代理地址',
         'settings.upstreamLanguage': '上游语言',
         'settings.originator': 'Originator',
         'settings.userAgent': 'User-Agent',
@@ -1267,6 +1266,7 @@ func renderInvitePage(cfg pluginConfig) string {
         'settings.saveLocal': '保存到本地',
         'settings.resetLocal': '恢复默认',
         'invite.title': '邀请',
+        'invite.proxyUrl': '代理地址',
         'invite.emails': '邮箱地址',
         'invite.emailsPlaceholder': 'name@example.com\nteammate@example.com',
         'invite.send': '发送邀请',
