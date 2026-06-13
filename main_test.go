@@ -98,6 +98,28 @@ func TestRenderInvitePageEscapesDefaults(t *testing.T) {
 	}
 }
 
+func TestRenderInvitePageCollapsesSettingsAndIncludesI18n(t *testing.T) {
+	page := renderInvitePage(defaultConfig())
+	if !strings.Contains(page, `<details class="panel collapsible" id="settingsPanel">`) {
+		t.Fatalf("page does not render Settings as a collapsed details card")
+	}
+	if strings.Contains(page, `<details class="panel collapsible" id="settingsPanel" open>`) {
+		t.Fatalf("settings details card is open by default")
+	}
+	for _, want := range []string{
+		`id="localeSelect"`,
+		`data-i18n="settings.title"`,
+		`'settings.title': 'Settings'`,
+		`'settings.title': '设置'`,
+		`'invite.send': 'Send invites'`,
+		`'invite.send': '发送邀请'`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page is missing %q", want)
+		}
+	}
+}
+
 func TestRegistrationUsesCustomPageInsteadOfConfigFields(t *testing.T) {
 	reg := pluginRegistration()
 	if len(reg.Metadata.ConfigFields) != 0 {

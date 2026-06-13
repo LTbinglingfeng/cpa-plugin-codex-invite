@@ -56,7 +56,7 @@ import (
 
 const (
 	pluginID                      = "codex-invite"
-	pluginVersion                 = "0.1.1"
+	pluginVersion                 = "0.1.2"
 	defaultReferralKey            = "codex_referral_persistent_invite"
 	defaultBaseURL                = "https://chatgpt.com"
 	defaultLanguage               = "zh-CN"
@@ -984,6 +984,9 @@ func renderInvitePage(cfg pluginConfig) string {
     button.secondary { background: color-mix(in srgb, CanvasText 10%, Canvas 90%); color: CanvasText; }
     button.warning { background: #b45309; }
     button:disabled { opacity: .54; cursor: not-allowed; }
+    .header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: end; gap: 10px; }
+    .locale-control { display: flex; align-items: center; gap: 8px; min-width: auto; font-size: 12px; font-weight: 650; }
+    .locale-control select { width: auto; min-width: 120px; padding: 7px 9px; }
     .layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
     .stack { display: grid; gap: 16px; }
     .panel {
@@ -991,6 +994,43 @@ func renderInvitePage(cfg pluginConfig) string {
       border-radius: 8px;
       padding: 16px;
       background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
+    }
+    .collapsible { padding: 0; overflow: hidden; }
+    .collapsible > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px;
+      cursor: pointer;
+      list-style: none;
+    }
+    .collapsible > summary::-webkit-details-marker { display: none; }
+    .collapsible > summary::after {
+      content: "+";
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      background: color-mix(in srgb, CanvasText 10%, Canvas 90%);
+      font-size: 15px;
+      font-weight: 760;
+      flex: 0 0 auto;
+    }
+    .collapsible[open] > summary {
+      border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas 88%);
+    }
+    .collapsible[open] > summary::after { content: "-"; }
+    .collapsible-body { padding: 16px; }
+    .summary-text { display: grid; gap: 3px; min-width: 0; }
+    .summary-title { font-size: 15px; font-weight: 720; letter-spacing: 0; }
+    .summary-subtitle {
+      color: color-mix(in srgb, CanvasText 62%, Canvas 38%);
+      font-size: 12px;
+      font-weight: 520;
+      line-height: 1.35;
     }
     .fields { display: grid; gap: 13px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
@@ -1038,6 +1078,7 @@ func renderInvitePage(cfg pluginConfig) string {
     @media (max-width: 860px) {
       main { padding: 16px; }
       header { display: grid; align-items: start; }
+      .header-actions { justify-content: start; }
       .layout, .grid { grid-template-columns: 1fr; }
       .actions, .inline { display: grid; }
       .actions button { width: 100%; }
@@ -1047,68 +1088,82 @@ func renderInvitePage(cfg pluginConfig) string {
 <body>
   <main>
     <header>
-      <h1>Codex Invite</h1>
-      <span class="metric" id="emailCount">0 emails</span>
+      <h1 data-i18n="app.title">Codex Invite</h1>
+      <div class="header-actions">
+        <label class="locale-control">
+          <span data-i18n="app.language">Language</span>
+          <select id="localeSelect" autocomplete="off">
+            <option value="en">English</option>
+            <option value="zh-CN">中文</option>
+          </select>
+        </label>
+        <span class="metric" id="emailCount">0 emails</span>
+      </div>
     </header>
     <div class="layout">
       <div class="stack">
         <section class="panel">
-          <h2>Connection</h2>
+          <h2 data-i18n="connection.title">Connection</h2>
           <div class="fields">
-            <label>CPA management key
+            <label><span data-i18n="connection.managementKey">CPA management key</span>
               <input id="managementKey" type="password" autocomplete="off" spellcheck="false">
             </label>
             <div class="actions">
-              <button id="loadAccounts" type="button">Load accounts</button>
+              <button id="loadAccounts" type="button" data-i18n="connection.loadAccounts">Load accounts</button>
             </div>
-            <label>Codex account
+            <label><span data-i18n="connection.account">Codex account</span>
               <select id="account"></select>
             </label>
             <span id="accountCount" class="muted"></span>
           </div>
         </section>
-        <section class="panel">
-          <h2>Settings</h2>
-          <div class="fields">
-            <label>Referral key
+        <details class="panel collapsible" id="settingsPanel">
+          <summary>
+            <span class="summary-text">
+              <span class="summary-title" data-i18n="settings.title">Settings</span>
+              <span class="summary-subtitle" data-i18n="settings.summary">Defaults work for most cases</span>
+            </span>
+          </summary>
+          <div class="fields collapsible-body">
+            <label><span data-i18n="settings.referralKey">Referral key</span>
               <input id="referralKey" spellcheck="false">
             </label>
-            <label>ChatGPT base URL
+            <label><span data-i18n="settings.baseUrl">ChatGPT base URL</span>
               <input id="baseUrl" spellcheck="false">
             </label>
             <div class="grid">
-              <label>Language
+              <label><span data-i18n="settings.upstreamLanguage">Language</span>
                 <input id="language" spellcheck="false">
               </label>
-              <label>Originator
+              <label><span data-i18n="settings.originator">Originator</span>
                 <input id="originator" spellcheck="false">
               </label>
             </div>
-            <label>User-Agent
+            <label><span data-i18n="settings.userAgent">User-Agent</span>
               <input id="userAgent" spellcheck="false">
             </label>
-            <label>Max emails per request
+            <label><span data-i18n="settings.maxEmails">Max emails per request</span>
               <input id="maxEmails" type="number" min="1" max="50" step="1">
             </label>
-            <label>Cookie
+            <label><span data-i18n="settings.cookie">Cookie</span>
               <textarea id="cookie" autocomplete="off" spellcheck="false"></textarea>
             </label>
             <div class="actions">
-              <button id="saveLocal" type="button" class="secondary">Save local</button>
-              <button id="resetLocal" type="button" class="secondary">Reset local</button>
+              <button id="saveLocal" type="button" class="secondary" data-i18n="settings.saveLocal">Save local</button>
+              <button id="resetLocal" type="button" class="secondary" data-i18n="settings.resetLocal">Reset local</button>
             </div>
           </div>
-        </section>
+        </details>
       </div>
       <section class="panel">
-        <h2>Invite</h2>
+        <h2 data-i18n="invite.title">Invite</h2>
         <div class="fields">
-          <label>Email addresses
-            <textarea id="emails" spellcheck="false" placeholder="name@example.com&#10;teammate@example.com"></textarea>
+          <label><span data-i18n="invite.emails">Email addresses</span>
+            <textarea id="emails" spellcheck="false" data-i18n-placeholder="invite.emailsPlaceholder" placeholder="name@example.com&#10;teammate@example.com"></textarea>
           </label>
           <div class="actions">
-            <button id="send" type="button">Send invites</button>
-            <button id="clearResult" type="button" class="secondary">Clear result</button>
+            <button id="send" type="button" data-i18n="invite.send">Send invites</button>
+            <button id="clearResult" type="button" class="secondary" data-i18n="invite.clearResult">Clear result</button>
           </div>
         </div>
       </section>
@@ -1119,8 +1174,102 @@ func renderInvitePage(cfg pluginConfig) string {
   <script>
     const DEFAULTS = ` + string(rawDefaults) + `;
     const STORAGE_KEY = 'codex-invite-settings-v2';
+    const LOCALE_STORAGE_KEY = 'codex-invite-locale-v1';
+    const TRANSLATIONS = {
+      en: {
+        'app.title': 'Codex Invite',
+        'app.language': 'Language',
+        'connection.title': 'Connection',
+        'connection.managementKey': 'CPA management key',
+        'connection.loadAccounts': 'Load accounts',
+        'connection.account': 'Codex account',
+        'settings.title': 'Settings',
+        'settings.summary': 'Defaults work for most cases',
+        'settings.referralKey': 'Referral key',
+        'settings.baseUrl': 'ChatGPT base URL',
+        'settings.upstreamLanguage': 'Language',
+        'settings.originator': 'Originator',
+        'settings.userAgent': 'User-Agent',
+        'settings.maxEmails': 'Max emails per request',
+        'settings.cookie': 'Cookie',
+        'settings.saveLocal': 'Save local',
+        'settings.resetLocal': 'Reset local',
+        'invite.title': 'Invite',
+        'invite.emails': 'Email addresses',
+        'invite.emailsPlaceholder': 'name@example.com\nteammate@example.com',
+        'invite.send': 'Send invites',
+        'invite.clearResult': 'Clear result',
+        'email.countOne': '{count} email',
+        'email.countOther': '{count} emails',
+        'account.none': 'No Codex accounts loaded',
+        'account.count': '{count} accounts loaded',
+        'status.localLoadFailed': 'Failed to load local settings: {error}',
+        'status.localSaved': 'Local settings saved.',
+        'status.localReset': 'Local settings reset.',
+        'status.accountsLoaded': 'Accounts loaded.',
+        'error.managementKeyRequired': 'CPA management key is required',
+        'error.loadAccountsFailed': 'Failed to load accounts',
+        'error.selectAccount': 'Select a Codex account',
+        'error.inviteFailed': 'Invite request failed'
+      },
+      'zh-CN': {
+        'app.title': 'Codex 邀请',
+        'app.language': '界面语言',
+        'connection.title': '连接',
+        'connection.managementKey': 'CPA 管理密钥',
+        'connection.loadAccounts': '加载账号',
+        'connection.account': 'Codex 账号',
+        'settings.title': '设置',
+        'settings.summary': '默认值通常可以直接使用',
+        'settings.referralKey': '邀请 referral key',
+        'settings.baseUrl': 'ChatGPT 基础地址',
+        'settings.upstreamLanguage': '上游语言',
+        'settings.originator': 'Originator',
+        'settings.userAgent': 'User-Agent',
+        'settings.maxEmails': '单次最多邮箱数',
+        'settings.cookie': 'Cookie',
+        'settings.saveLocal': '保存到本地',
+        'settings.resetLocal': '恢复默认',
+        'invite.title': '邀请',
+        'invite.emails': '邮箱地址',
+        'invite.emailsPlaceholder': 'name@example.com\nteammate@example.com',
+        'invite.send': '发送邀请',
+        'invite.clearResult': '清空结果',
+        'email.countOne': '{count} 个邮箱',
+        'email.countOther': '{count} 个邮箱',
+        'account.none': '未加载 Codex 账号',
+        'account.count': '已加载 {count} 个账号',
+        'status.localLoadFailed': '加载本地设置失败：{error}',
+        'status.localSaved': '本地设置已保存。',
+        'status.localReset': '本地设置已恢复默认。',
+        'status.accountsLoaded': '账号已加载。',
+        'error.managementKeyRequired': '需要填写 CPA 管理密钥',
+        'error.loadAccountsFailed': '加载账号失败',
+        'error.selectAccount': '请选择 Codex 账号',
+        'error.inviteFailed': '邀请请求失败'
+      }
+    };
     const origin = window.location.origin;
-    const state = { accounts: [] };
+
+    function normalizeLocale(raw) {
+      return String(raw || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+    }
+
+    function detectLocale() {
+      try {
+        const saved = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+        if (saved) return normalizeLocale(saved);
+      } catch (error) {
+        // Ignore storage access failures and fall back to the browser locale.
+      }
+      const candidates = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+      for (const item of candidates) {
+        if (String(item || '').toLowerCase().startsWith('zh')) return 'zh-CN';
+      }
+      return 'en';
+    }
+
+    const state = { accounts: [], locale: detectLocale() };
 
     function field(id) {
       return document.getElementById(id);
@@ -1130,6 +1279,7 @@ func renderInvitePage(cfg pluginConfig) string {
     const statusBox = field('status');
     const linksBox = field('links');
     const keyInput = field('managementKey');
+    const localeSelect = field('localeSelect');
     const loadButton = field('loadAccounts');
     const saveLocalButton = field('saveLocal');
     const resetLocalButton = field('resetLocal');
@@ -1137,6 +1287,47 @@ func renderInvitePage(cfg pluginConfig) string {
     const clearResultButton = field('clearResult');
     const accountCount = field('accountCount');
     const emailCount = field('emailCount');
+
+    function t(key, params) {
+      const dictionary = TRANSLATIONS[state.locale] || TRANSLATIONS.en;
+      let message = dictionary[key] || TRANSLATIONS.en[key] || key;
+      for (const name of Object.keys(params || {})) {
+        message = message.split('{' + name + '}').join(String(params[name]));
+      }
+      return message;
+    }
+
+    function emailCountText(count) {
+      return t(count === 1 ? 'email.countOne' : 'email.countOther', { count });
+    }
+
+    function updateAccountCount() {
+      accountCount.textContent = state.accounts.length ? t('account.count', { count: state.accounts.length }) : t('account.none');
+    }
+
+    function applyLocale() {
+      document.documentElement.lang = state.locale;
+      document.title = t('app.title');
+      localeSelect.value = state.locale;
+      for (const item of document.querySelectorAll('[data-i18n]')) {
+        item.textContent = t(item.dataset.i18n);
+      }
+      for (const item of document.querySelectorAll('[data-i18n-placeholder]')) {
+        item.placeholder = t(item.dataset.i18nPlaceholder);
+      }
+      updateAccountCount();
+      updateEmailCount();
+    }
+
+    function changeLocale(locale) {
+      state.locale = normalizeLocale(locale);
+      try {
+        window.localStorage.setItem(LOCALE_STORAGE_KEY, state.locale);
+      } catch (error) {
+        // The page remains usable if localStorage is unavailable.
+      }
+      applyLocale();
+    }
 
     function setStatus(message, error) {
       statusBox.hidden = false;
@@ -1168,7 +1359,7 @@ func renderInvitePage(cfg pluginConfig) string {
 
     function authHeaders() {
       const key = keyInput.value.trim();
-      if (!key) throw new Error('CPA management key is required');
+      if (!key) throw new Error(t('error.managementKeyRequired'));
       const authorization = key.toLowerCase().startsWith('bearer ') ? key : 'Bearer ' + key;
       return {
         'Authorization': authorization,
@@ -1223,20 +1414,20 @@ func renderInvitePage(cfg pluginConfig) string {
           return;
         }
       } catch (error) {
-        setStatus('Failed to load local settings: ' + (error.message || String(error)), true);
+        setStatus(t('status.localLoadFailed', { error: error.message || String(error) }), true);
       }
       applySettings(DEFAULTS);
     }
 
     function saveLocalSettings() {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settingsForStorage()));
-      setStatus('Local settings saved.');
+      setStatus(t('status.localSaved'));
     }
 
     function resetLocalSettings() {
       window.localStorage.removeItem(STORAGE_KEY);
       applySettings(DEFAULTS);
-      setStatus('Local settings reset.');
+      setStatus(t('status.localReset'));
       updateEmailCount();
     }
 
@@ -1246,7 +1437,7 @@ func renderInvitePage(cfg pluginConfig) string {
 
     function updateEmailCount() {
       const count = splitEmails(field('emails').value).length;
-      emailCount.textContent = count + (count === 1 ? ' email' : ' emails');
+      emailCount.textContent = emailCountText(count);
       sendButton.disabled = count === 0 || !accountSelect.selectedOptions.length;
     }
 
@@ -1260,7 +1451,7 @@ func renderInvitePage(cfg pluginConfig) string {
         option.textContent = [account.email, account.account, account.name].filter(Boolean).join(' - ') || account.name;
         accountSelect.appendChild(option);
       }
-      accountCount.textContent = state.accounts.length ? state.accounts.length + ' accounts loaded' : 'No Codex accounts loaded';
+      updateAccountCount();
       updateEmailCount();
     }
 
@@ -1270,9 +1461,9 @@ func renderInvitePage(cfg pluginConfig) string {
       try {
         const response = await fetch('/v0/management/codex-invite/accounts', { headers: authHeaders() });
         const data = await readJSON(response);
-        if (!response.ok) throw new Error(formatError(data, 'Failed to load accounts'));
+        if (!response.ok) throw new Error(formatError(data, t('error.loadAccountsFailed')));
         renderAccounts(data.accounts || []);
-        setStatus('Accounts loaded.');
+        setStatus(t('status.accountsLoaded'));
       } catch (error) {
         setStatus(error.message || String(error), true);
       } finally {
@@ -1285,7 +1476,7 @@ func renderInvitePage(cfg pluginConfig) string {
       sendButton.disabled = true;
       try {
         const selected = accountSelect.selectedOptions[0];
-        if (!selected) throw new Error('Select a Codex account');
+        if (!selected) throw new Error(t('error.selectAccount'));
         const settings = getSettings();
         const payload = {
           auth_index: selected.value,
@@ -1306,7 +1497,7 @@ func renderInvitePage(cfg pluginConfig) string {
           body: JSON.stringify(payload)
         });
         const data = await readJSON(response);
-        if (!response.ok) throw new Error(formatError(data, 'Invite request failed'));
+        if (!response.ok) throw new Error(formatError(data, t('error.inviteFailed')));
         const ok = data.ok === true;
         setStatus(JSON.stringify(data, null, 2), !ok);
         for (const invite of data.invites || []) {
@@ -1325,6 +1516,7 @@ func renderInvitePage(cfg pluginConfig) string {
       }
     }
 
+    localeSelect.addEventListener('change', () => changeLocale(localeSelect.value));
     loadButton.addEventListener('click', loadAccounts);
     saveLocalButton.addEventListener('click', saveLocalSettings);
     resetLocalButton.addEventListener('click', resetLocalSettings);
@@ -1332,8 +1524,9 @@ func renderInvitePage(cfg pluginConfig) string {
     clearResultButton.addEventListener('click', clearResult);
     field('emails').addEventListener('input', updateEmailCount);
     accountSelect.addEventListener('change', updateEmailCount);
-    loadLocalSettings();
     renderAccounts([]);
+    applyLocale();
+    loadLocalSettings();
     updateEmailCount();
   </script>
 </body>

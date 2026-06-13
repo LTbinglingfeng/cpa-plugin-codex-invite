@@ -25,5 +25,5 @@ clean:
 	rm -rf $(DIST_DIR)
 
 package: build
-	cd $(DIST_DIR) && zip -q $(PLUGIN_ID)_0.1.1_$$(go env GOOS)_$$(go env GOARCH).zip $(PLUGIN_ID).$(PLUGIN_EXT)
-	cd $(DIST_DIR) && shasum -a 256 $(PLUGIN_ID)_0.1.1_$$(go env GOOS)_$$(go env GOARCH).zip > checksums.txt
+	cd $(DIST_DIR) && zip -q $(PLUGIN_ID)_0.1.2_$$(go env GOOS)_$$(go env GOARCH).zip $(PLUGIN_ID).$(PLUGIN_EXT)
+	cd $(DIST_DIR) && shasum -a 256 $(PLUGIN_ID)_0.1.2_$$(go env GOOS)_$$(go env GOARCH).zip > checksums.txt
