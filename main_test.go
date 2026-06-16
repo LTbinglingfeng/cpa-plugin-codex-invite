@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 func TestCollectEmailsSplitsDedupesAndValidates(t *testing.T) {
@@ -173,6 +174,74 @@ func TestParseCodexCredentialTokenDataFallback(t *testing.T) {
 		t.Fatalf("parseCodexCredential() error = %v", err)
 	}
 	if credential.AccessToken != "access-2" || credential.AccountID != "account-2" || credential.Email != "fallback@example.com" {
+		t.Fatalf("credential = %#v", credential)
+	}
+}
+
+func TestFetchCodexAccountsFromHost(t *testing.T) {
+	accounts, err := fetchCodexAccountsFromHost(func(method string, payload any) (json.RawMessage, error) {
+		if method != pluginabi.MethodHostAuthList {
+			t.Fatalf("method = %q, want %q", method, pluginabi.MethodHostAuthList)
+		}
+		raw, err := json.Marshal(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+			{
+				AuthIndex: "codex-2",
+				Name:      "team.json",
+				Provider:  "codex",
+				Email:     "team@example.com",
+				Account:   "team-account",
+				Label:     "Team",
+				Status:    "ok",
+				Source:    "file",
+			},
+			{
+				AuthIndex: "gemini-1",
+				Name:      "gemini.json",
+				Provider:  "gemini",
+			},
+			{
+				AuthIndex: "codex-disabled",
+				Name:      "disabled.json",
+				Provider:  "codex",
+				Disabled:  true,
+			},
+		}})
+		return raw, err
+	})
+	if err != nil {
+		t.Fatalf("fetchCodexAccountsFromHost() error = %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("accounts = %#v", accounts)
+	}
+	if accounts[0].AuthIndex != "codex-2" || accounts[0].Name != "team.json" || accounts[0].Email != "team@example.com" {
+		t.Fatalf("account = %#v", accounts[0])
+	}
+}
+
+func TestFetchCodexCredentialFromHost(t *testing.T) {
+	credential, err := fetchCodexCredentialFromHost(
+		func(method string, payload any) (json.RawMessage, error) {
+			if method != pluginabi.MethodHostAuthGet {
+				t.Fatalf("method = %q, want %q", method, pluginabi.MethodHostAuthGet)
+			}
+			req, ok := payload.(pluginapi.HostAuthGetRequest)
+			if !ok || req.AuthIndex != "codex-1" {
+				t.Fatalf("payload = %#v", payload)
+			}
+			raw, err := json.Marshal(pluginapi.HostAuthGetResponse{
+				AuthIndex: "codex-1",
+				Name:      "codex.json",
+				JSON:      json.RawMessage(`{"type":"codex","access_token":"access-host","account_id":"account-host","email":"host@example.com"}`),
+			})
+			return raw, err
+		},
+		accountInfo{AuthIndex: "codex-1"},
+	)
+	if err != nil {
+		t.Fatalf("fetchCodexCredentialFromHost() error = %v", err)
+	}
+	if credential.AccessToken != "access-host" || credential.AccountID != "account-host" || credential.Email != "host@example.com" {
 		t.Fatalf("credential = %#v", credential)
 	}
 }

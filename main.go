@@ -12,8 +12,8 @@ typedef struct {
 typedef struct {
 	uint32_t abi_version;
 	void* host_ctx;
-	void* call;
-	void* free_buffer;
+	int (*call)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+	void (*free_buffer)(void*, size_t);
 } cliproxy_host_api;
 
 typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
@@ -30,6 +30,29 @@ typedef struct {
 extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
+
+static const cliproxy_host_api* stored_host;
+
+static void store_host_api(const cliproxy_host_api* host) {
+	stored_host = host;
+}
+
+static int host_api_available(void) {
+	return stored_host != NULL && stored_host->call != NULL;
+}
+
+static int call_host_api(const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
+	if (stored_host == NULL || stored_host->call == NULL) {
+		return 1;
+	}
+	return stored_host->call(stored_host->host_ctx, method, request, request_len, response);
+}
+
+static void free_host_buffer(void* ptr, size_t len) {
+	if (stored_host != NULL && stored_host->free_buffer != NULL && ptr != NULL) {
+		stored_host->free_buffer(ptr, len);
+	}
+}
 */
 import "C"
 
@@ -100,6 +123,8 @@ type envelopeError struct {
 	Message string `json:"message"`
 }
 
+type hostCallbackFunc func(method string, payload any) (json.RawMessage, error)
+
 type lifecycleRequest struct {
 	ConfigYAML []byte `json:"config_yaml"`
 }
@@ -149,6 +174,10 @@ type accountsResponse struct {
 	Accounts []accountInfo `json:"accounts"`
 }
 
+type hostAuthListResponse struct {
+	Files []pluginapi.HostAuthFileEntry `json:"files"`
+}
+
 type inviteRequest struct {
 	AuthIndex           string   `json:"auth_index,omitempty"`
 	AuthName            string   `json:"auth_name,omitempty"`
@@ -190,10 +219,11 @@ type codexCredential struct {
 }
 
 //export cliproxy_plugin_init
-func cliproxy_plugin_init(_ *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
 	if plugin == nil {
 		return 1
 	}
+	C.store_host_api(host)
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -550,6 +580,9 @@ func selectAccount(accounts []accountInfo, req inviteRequest) (accountInfo, erro
 }
 
 func fetchCodexAccounts(req pluginapi.ManagementRequest, explicitOrigin string) ([]accountInfo, error) {
+	if hostCallbacksAvailable() {
+		return fetchCodexAccountsFromHost(callHost)
+	}
 	origin, errOrigin := resolveManagementOrigin(req, explicitOrigin)
 	if errOrigin != nil {
 		return nil, errOrigin
@@ -608,7 +641,58 @@ func fetchCodexAccounts(req pluginapi.ManagementRequest, explicitOrigin string) 
 	return accounts, nil
 }
 
+func fetchCodexAccountsFromHost(call hostCallbackFunc) ([]accountInfo, error) {
+	if call == nil {
+		return nil, fmt.Errorf("host auth callback is unavailable")
+	}
+	result, errCall := call(pluginabi.MethodHostAuthList, map[string]any{})
+	if errCall != nil {
+		return nil, errCall
+	}
+	var payload hostAuthListResponse
+	if errDecode := json.Unmarshal(result, &payload); errDecode != nil {
+		return nil, fmt.Errorf("decode host.auth.list response: %w", errDecode)
+	}
+
+	accounts := make([]accountInfo, 0, len(payload.Files))
+	for _, file := range payload.Files {
+		provider := strings.TrimSpace(file.Provider)
+		if provider == "" {
+			provider = strings.TrimSpace(file.Type)
+		}
+		if !strings.EqualFold(provider, "codex") || file.Disabled || file.Unavailable {
+			continue
+		}
+		authIndex := strings.TrimSpace(file.AuthIndex)
+		if authIndex == "" {
+			authIndex = strings.TrimSpace(file.ID)
+		}
+		name := strings.TrimSpace(file.Name)
+		if authIndex == "" || name == "" || !strings.HasSuffix(strings.ToLower(name), ".json") {
+			continue
+		}
+		accounts = append(accounts, accountInfo{
+			AuthIndex: authIndex,
+			Name:      name,
+			Label:     strings.TrimSpace(file.Label),
+			Email:     strings.TrimSpace(file.Email),
+			Account:   strings.TrimSpace(file.Account),
+			Status:    strings.TrimSpace(file.Status),
+			Source:    strings.TrimSpace(file.Source),
+		})
+	}
+	sort.Slice(accounts, func(i, j int) bool {
+		left := strings.ToLower(accounts[i].Email + accounts[i].Name)
+		right := strings.ToLower(accounts[j].Email + accounts[j].Name)
+		return left < right
+	})
+	return accounts, nil
+}
+
 func fetchCodexCredential(req pluginapi.ManagementRequest, explicitOrigin string, account accountInfo) (codexCredential, error) {
+	if hostCallbacksAvailable() {
+		return fetchCodexCredentialFromHost(callHost, account)
+	}
 	origin, errOrigin := resolveManagementOrigin(req, explicitOrigin)
 	if errOrigin != nil {
 		return codexCredential{}, errOrigin
@@ -635,6 +719,38 @@ func fetchCodexCredential(req pluginapi.ManagementRequest, explicitOrigin string
 	}
 	if credential.AccessToken == "" {
 		return codexCredential{}, httpStatusError{status: http.StatusBadRequest, msg: "selected Codex credential does not contain access_token"}
+	}
+	return credential, nil
+}
+
+func fetchCodexCredentialFromHost(call hostCallbackFunc, account accountInfo) (codexCredential, error) {
+	if call == nil {
+		return codexCredential{}, fmt.Errorf("host auth callback is unavailable")
+	}
+	authIndex := strings.TrimSpace(account.AuthIndex)
+	if authIndex == "" {
+		return codexCredential{}, httpStatusError{status: http.StatusBadRequest, msg: "selected Codex account does not contain auth_index"}
+	}
+	result, errCall := call(pluginabi.MethodHostAuthGet, pluginapi.HostAuthGetRequest{AuthIndex: authIndex})
+	if errCall != nil {
+		return codexCredential{}, errCall
+	}
+	var payload pluginapi.HostAuthGetResponse
+	if errDecode := json.Unmarshal(result, &payload); errDecode != nil {
+		return codexCredential{}, fmt.Errorf("decode host.auth.get response: %w", errDecode)
+	}
+	credential, errCredential := parseCodexCredential(payload.JSON)
+	if errCredential != nil {
+		return codexCredential{}, errCredential
+	}
+	if credential.AccessToken == "" {
+		return codexCredential{}, httpStatusError{status: http.StatusBadRequest, msg: "selected Codex credential does not contain access_token"}
+	}
+	if credential.AccountID == "" {
+		credential.AccountID = account.ChatGPTAccountID
+	}
+	if credential.Email == "" {
+		credential.Email = account.Email
 	}
 	return credential, nil
 }
@@ -944,6 +1060,56 @@ func okEnvelope(v any) ([]byte, error) {
 func errorEnvelope(code, message string) []byte {
 	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
 	return raw
+}
+
+func hostCallbacksAvailable() bool {
+	return C.host_api_available() != 0
+}
+
+func callHost(method string, payload any) (json.RawMessage, error) {
+	rawPayload, errMarshal := json.Marshal(payload)
+	if errMarshal != nil {
+		return nil, fmt.Errorf("marshal host callback payload %s: %w", method, errMarshal)
+	}
+	cMethod := C.CString(method)
+	defer C.free(unsafe.Pointer(cMethod))
+
+	var response C.cliproxy_buffer
+	var requestPtr *C.uint8_t
+	if len(rawPayload) > 0 {
+		cPayload := C.CBytes(rawPayload)
+		if cPayload == nil {
+			return nil, fmt.Errorf("allocate host callback payload %s", method)
+		}
+		defer C.free(cPayload)
+		requestPtr = (*C.uint8_t)(cPayload)
+	}
+	callCode := C.call_host_api(cMethod, requestPtr, C.size_t(len(rawPayload)), &response)
+	var rawResponse []byte
+	if response.ptr != nil && response.len > 0 {
+		rawResponse = C.GoBytes(response.ptr, C.int(response.len))
+	}
+	if response.ptr != nil {
+		C.free_host_buffer(response.ptr, response.len)
+	}
+	if len(rawResponse) == 0 {
+		return nil, fmt.Errorf("host callback %s returned no response, code=%d", method, int(callCode))
+	}
+
+	var env envelope
+	if errUnmarshal := json.Unmarshal(rawResponse, &env); errUnmarshal != nil {
+		return nil, fmt.Errorf("decode host callback envelope %s: %w", method, errUnmarshal)
+	}
+	if !env.OK {
+		if env.Error != nil {
+			return nil, fmt.Errorf("%s: %s", env.Error.Code, env.Error.Message)
+		}
+		return nil, fmt.Errorf("host callback %s failed", method)
+	}
+	if callCode != 0 {
+		return nil, fmt.Errorf("host callback %s returned code=%d", method, int(callCode))
+	}
+	return append(json.RawMessage(nil), env.Result...), nil
 }
 
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {
