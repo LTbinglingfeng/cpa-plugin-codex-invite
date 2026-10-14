@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 )
 
 func TestCollectEmailsSplitsDedupesAndValidates(t *testing.T) {
@@ -34,16 +34,6 @@ func TestCollectEmailsRejectsInvalidAndTooMany(t *testing.T) {
 	}
 	if _, err := collectEmails(inviteRequest{EmailsText: "a@example.com b@example.com"}, 1); err == nil {
 		t.Fatal("collectEmails() error = nil, want max email error")
-	}
-}
-
-func TestNormalizeOrigin(t *testing.T) {
-	got, err := normalizeOrigin("https://127.0.0.1:8317/some/path?x=1")
-	if err != nil {
-		t.Fatalf("normalizeOrigin() error = %v", err)
-	}
-	if got != "https://127.0.0.1:8317" {
-		t.Fatalf("origin = %q, want https://127.0.0.1:8317", got)
 	}
 }
 

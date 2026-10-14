@@ -9,11 +9,14 @@ typedef struct {
 	size_t len;
 } cliproxy_buffer;
 
+typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_host_free_fn)(void*, size_t);
+
 typedef struct {
 	uint32_t abi_version;
 	void* host_ctx;
-	void* call;
-	void* free_buffer;
+	cliproxy_host_call_fn call;
+	cliproxy_host_free_fn free_buffer;
 } cliproxy_host_api;
 
 typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
@@ -26,6 +29,17 @@ typedef struct {
 	cliproxy_plugin_free_fn free_buffer;
 	cliproxy_plugin_shutdown_fn shutdown;
 } cliproxy_plugin_api;
+
+// Copy the API: the caller's struct need not outlive initialization.
+static cliproxy_host_api stored_host;
+static void store_host_api(const cliproxy_host_api* host) { stored_host = *host; }
+static int call_host_api(const char* method, const uint8_t* request, size_t len, cliproxy_buffer* response) {
+	if (stored_host.call == NULL || stored_host.free_buffer == NULL) return 1;
+	return stored_host.call(stored_host.host_ctx, method, request, len, response);
+}
+static void free_host_buffer(void* ptr, size_t len) {
+	if (ptr != NULL && stored_host.free_buffer != NULL) stored_host.free_buffer(ptr, len);
+}
 
 extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
@@ -49,13 +63,14 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	pluginID                      = "codex-invite"
+	pluginSchemaVersion    uint32 = 6
 	defaultReferralKey            = "codex_referral_persistent_invite"
 	defaultBaseURL                = "https://chatgpt.com"
 	defaultLanguage               = "zh-CN"
@@ -67,16 +82,13 @@ const (
 	managementAccountsPath        = "/v0/management/codex-invite/accounts"
 	managementInvitePath          = "/v0/management/codex-invite/invite"
 	resourceInvitePath            = "/v0/resource/plugins/codex-invite/invite"
-	authFilesPath                 = "/v0/management/auth-files"
-	authFileDownloadPath          = "/v0/management/auth-files/download"
 	inviteEndpointPath            = "/backend-api/wham/referrals/invite"
-	requestManagementOrigin       = "X-Codex-Invite-Origin"
 	contentTypeJSON               = "application/json; charset=utf-8"
 	contentTypeHTML               = "text/html; charset=utf-8"
-	upstreamBodyLimit       int64 = 1 << 20
+	upstreamBodyLimit      int64  = 1 << 20
 )
 
-var pluginVersion = "0.1.4"
+var pluginVersion = "0.2.0"
 
 var (
 	activeConfig atomic.Value
@@ -88,6 +100,57 @@ func init() {
 }
 
 func main() {}
+
+// Tests may replace hostCall; restore it afterwards and do not mutate it in parallel.
+var hostCall = callHost
+
+func callHost(method string, payload any) (json.RawMessage, error) {
+	rawPayload, errMarshal := json.Marshal(payload)
+	if errMarshal != nil {
+		return nil, fmt.Errorf("marshal host callback payload %s: %w", method, errMarshal)
+	}
+	cMethod := C.CString(method)
+	defer C.free(unsafe.Pointer(cMethod))
+
+	var response C.cliproxy_buffer
+	var requestPtr *C.uint8_t
+	if len(rawPayload) > 0 {
+		cPayload := C.CBytes(rawPayload)
+		if cPayload == nil {
+			return nil, fmt.Errorf("allocate host callback payload %s", method)
+		}
+		defer C.free(cPayload)
+		requestPtr = (*C.uint8_t)(cPayload)
+	}
+	callCode := C.call_host_api(cMethod, requestPtr, C.size_t(len(rawPayload)), &response)
+	if response.ptr != nil {
+		defer C.free_host_buffer(response.ptr, response.len)
+	}
+	// Keep well below C.int's limit before C.GoBytes converts the length.
+	if response.len > 16<<20 {
+		return nil, fmt.Errorf("host callback %s response is too large", method)
+	}
+	var rawResponse []byte
+	if response.ptr != nil && response.len > 0 {
+		rawResponse = C.GoBytes(response.ptr, C.int(response.len))
+	}
+	if len(rawResponse) == 0 {
+		return nil, fmt.Errorf("host callback %s returned no response, code=%d", method, int(callCode))
+	}
+
+	var env envelope
+	if errUnmarshal := json.Unmarshal(rawResponse, &env); errUnmarshal != nil {
+		return nil, fmt.Errorf("decode host callback envelope %s: %w", method, errUnmarshal)
+	}
+	if !env.OK {
+		// Host errors may contain credential paths or contents; do not expose them.
+		return nil, fmt.Errorf("host callback %s failed", method)
+	}
+	if callCode != 0 {
+		return nil, fmt.Errorf("host callback %s returned code=%d", method, int(callCode))
+	}
+	return append(json.RawMessage(nil), env.Result...), nil
+}
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -101,7 +164,8 @@ type envelopeError struct {
 }
 
 type lifecycleRequest struct {
-	ConfigYAML []byte `json:"config_yaml"`
+	SchemaVersion uint32 `json:"schema_version"`
+	ConfigYAML    []byte `json:"config_yaml"`
 }
 
 type registration struct {
@@ -162,7 +226,6 @@ type inviteRequest struct {
 	UserAgent           string   `json:"user_agent,omitempty"`
 	Cookie              string   `json:"cookie,omitempty"`
 	MaxEmailsPerRequest int      `json:"max_emails_per_request,omitempty"`
-	ManagementOrigin    string   `json:"management_origin,omitempty"`
 }
 
 type inviteLink struct {
@@ -190,10 +253,11 @@ type codexCredential struct {
 }
 
 //export cliproxy_plugin_init
-func cliproxy_plugin_init(_ *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
-	if plugin == nil {
+func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+	if plugin == nil || host == nil || host.abi_version != C.uint32_t(pluginabi.ABIVersion) || host.call == nil || host.free_buffer == nil {
 		return 1
 	}
+	C.store_host_api(host)
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -212,6 +276,10 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		return 1
 	}
 
+	if requestLen > 16<<20 || (request == nil && requestLen != 0) {
+		writeResponse(response, errorEnvelope("invalid_request", "invalid or oversized request"))
+		return 1
+	}
 	var requestBytes []byte
 	if request != nil && requestLen > 0 {
 		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
@@ -240,10 +308,21 @@ func cliproxyPluginShutdown() {}
 func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		if method == pluginabi.MethodPluginRegister {
+			var req lifecycleRequest
+			if err := json.Unmarshal(request, &req); err != nil {
+				return nil, err
+			}
+			if req.SchemaVersion < pluginSchemaVersion {
+				return nil, fmt.Errorf("Codex Invite requires host schema >= 6 (CPA v8.0.28+)")
+			}
+		}
 		if errConfigure := configure(request); errConfigure != nil {
 			return nil, errConfigure
 		}
 		return okEnvelope(pluginRegistration())
+	case pluginabi.MethodPluginShutdown, pluginabi.MethodPluginQuiesce:
+		return okEnvelope(struct{}{})
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(managementRegistrationResponse{
 			Routes: []pluginapi.ManagementRoute{
@@ -360,12 +439,12 @@ func currentConfig() pluginConfig {
 
 func pluginRegistration() registration {
 	return registration{
-		SchemaVersion: pluginabi.SchemaVersion,
+		SchemaVersion: pluginSchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             "Codex Invite",
 			Version:          pluginVersion,
 			Author:           "router-for-me",
-			GitHubRepository: "https://github.com/router-for-me/cpa-plugin-codex-invite",
+			GitHubRepository: "https://github.com/LTbinglingfeng/cpa-plugin-codex-invite",
 		},
 		Capabilities: registrationCapabilities{ManagementAPI: true},
 	}
@@ -386,23 +465,36 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case strings.EqualFold(req.Method, http.MethodGet) && path == resourceInvitePath:
 		return okEnvelope(htmlResponse(http.StatusOK, renderInvitePage(currentConfig())))
 	case strings.EqualFold(req.Method, http.MethodGet) && path == managementAccountsPath:
-		return okEnvelope(handleAccounts(req.ManagementRequest))
+		return okEnvelope(handleAccounts(req))
 	case strings.EqualFold(req.Method, http.MethodPost) && path == managementInvitePath:
-		return okEnvelope(handleInvite(req.ManagementRequest))
+		return okEnvelope(handleInvite(req))
 	default:
 		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "plugin route not found"}))
 	}
 }
 
-func handleAccounts(req pluginapi.ManagementRequest) pluginapi.ManagementResponse {
-	accounts, errAccounts := fetchCodexAccounts(req, "")
+// CPA validates the key before dispatching management routes. This presence
+// check is defense in depth, not a replacement for the host's authentication.
+func hasManagementKey(req managementRequest) bool {
+	return strings.TrimSpace(req.Headers.Get("Authorization")) != "" ||
+		strings.TrimSpace(req.Headers.Get("X-Management-Key")) != ""
+}
+
+func handleAccounts(req managementRequest) pluginapi.ManagementResponse {
+	if !hasManagementKey(req) {
+		return jsonResponse(http.StatusUnauthorized, map[string]any{"error": "CPA management key is required"})
+	}
+	accounts, errAccounts := fetchCodexAccounts(req)
 	if errAccounts != nil {
 		return jsonResponse(statusForError(errAccounts), map[string]any{"error": errAccounts.Error()})
 	}
 	return jsonResponse(http.StatusOK, accountsResponse{Accounts: accounts})
 }
 
-func handleInvite(req pluginapi.ManagementRequest) pluginapi.ManagementResponse {
+func handleInvite(req managementRequest) pluginapi.ManagementResponse {
+	if !hasManagementKey(req) {
+		return jsonResponse(http.StatusUnauthorized, map[string]any{"error": "CPA management key is required"})
+	}
 	if len(req.Body) > maxManagementBodyBytes {
 		return jsonResponse(http.StatusRequestEntityTooLarge, map[string]any{"error": "request body is too large"})
 	}
@@ -429,7 +521,7 @@ func handleInvite(req pluginapi.ManagementRequest) pluginapi.ManagementResponse 
 		return jsonResponse(http.StatusBadRequest, map[string]any{"error": errEmails.Error()})
 	}
 
-	accounts, errAccounts := fetchCodexAccounts(req, payload.ManagementOrigin)
+	accounts, errAccounts := fetchCodexAccounts(req)
 	if errAccounts != nil {
 		return jsonResponse(statusForError(errAccounts), map[string]any{"error": errAccounts.Error()})
 	}
@@ -438,7 +530,7 @@ func handleInvite(req pluginapi.ManagementRequest) pluginapi.ManagementResponse 
 		return jsonResponse(http.StatusBadRequest, map[string]any{"error": errAccount.Error()})
 	}
 
-	credential, errCredential := fetchCodexCredential(req, payload.ManagementOrigin, account)
+	credential, errCredential := fetchCodexCredential(req, account)
 	if errCredential != nil {
 		return jsonResponse(statusForError(errCredential), map[string]any{"error": errCredential.Error()})
 	}
@@ -539,165 +631,79 @@ func selectAccount(accounts []accountInfo, req inviteRequest) (accountInfo, erro
 		return accountInfo{}, fmt.Errorf("auth_index or auth_name is required")
 	}
 	for _, account := range accounts {
-		if authIndex != "" && strings.EqualFold(account.AuthIndex, authIndex) {
+		if authIndex != "" && account.AuthIndex == authIndex {
 			return account, nil
 		}
-		if authName != "" && account.Name == authName {
+		if authIndex == "" && authName != "" && account.Name == authName {
 			return account, nil
 		}
 	}
 	return accountInfo{}, fmt.Errorf("selected Codex credential was not found")
 }
 
-func fetchCodexAccounts(req pluginapi.ManagementRequest, explicitOrigin string) ([]accountInfo, error) {
-	origin, errOrigin := resolveManagementOrigin(req, explicitOrigin)
-	if errOrigin != nil {
-		return nil, errOrigin
+// Management routes remain authenticated by CPA; never forward the management key.
+func fetchCodexAccounts(req managementRequest) ([]accountInfo, error) {
+	raw, err := hostCall(pluginabi.MethodHostAuthList, hostAuthListRequest{HostCallbackID: req.HostCallbackID})
+	if err != nil {
+		return nil, err
 	}
-	authHeader := strings.TrimSpace(req.Headers.Get("Authorization"))
-	if authHeader == "" {
-		return nil, httpStatusError{status: http.StatusUnauthorized, msg: "CPA management key is required"}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	status, raw, errFetch := callLocalManagement(ctx, origin, http.MethodGet, authFilesPath, authHeader, nil)
-	if errFetch != nil {
-		return nil, errFetch
-	}
-	if status != http.StatusOK {
-		return nil, httpStatusError{status: http.StatusBadGateway, msg: fmt.Sprintf("failed to list CPA auth files: status %d", status)}
-	}
-
 	var payload struct {
-		Files []map[string]any `json:"files"`
+		Files []pluginapi.HostAuthFileEntry `json:"files"`
 	}
-	if errDecode := json.Unmarshal(raw, &payload); errDecode != nil {
-		return nil, fmt.Errorf("decode auth files response: %w", errDecode)
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("decode host.auth.list result")
 	}
-
 	accounts := make([]accountInfo, 0)
 	for _, file := range payload.Files {
-		provider := firstString(file, "provider", "type")
-		if !strings.EqualFold(provider, "codex") {
+		provider := strings.TrimSpace(file.Provider)
+		if provider == "" {
+			provider = strings.TrimSpace(file.Type)
+		}
+		name := strings.TrimSpace(file.Name)
+		index := strings.TrimSpace(file.AuthIndex)
+		if !strings.EqualFold(provider, "codex") || file.Disabled || file.Unavailable || file.RuntimeOnly || index == "" || !strings.EqualFold(strings.TrimSpace(file.Source), "file") || !strings.HasSuffix(strings.ToLower(name), ".json") {
 			continue
 		}
-		if boolValue(file["disabled"]) || boolValue(file["unavailable"]) {
-			continue
-		}
-		name := firstString(file, "name")
-		if name == "" || !strings.HasSuffix(strings.ToLower(name), ".json") {
-			continue
-		}
-		accounts = append(accounts, accountInfo{
-			AuthIndex:        firstString(file, "auth_index", "auth-index"),
-			Name:             name,
-			Label:            firstString(file, "label"),
-			Email:            firstString(file, "email"),
-			Account:          firstString(file, "account"),
-			ChatGPTAccountID: nestedString(file, "id_token", "chatgpt_account_id"),
-			Status:           firstString(file, "status"),
-			Source:           firstString(file, "source"),
-		})
+		accounts = append(accounts, accountInfo{AuthIndex: index, Name: name, Label: file.Label, Email: file.Email, Account: file.Account, Status: file.Status, Source: file.Source})
 	}
 	sort.Slice(accounts, func(i, j int) bool {
-		left := strings.ToLower(accounts[i].Email + accounts[i].Name)
-		right := strings.ToLower(accounts[j].Email + accounts[j].Name)
-		return left < right
+		return strings.ToLower(accounts[i].Email+accounts[i].Name) < strings.ToLower(accounts[j].Email+accounts[j].Name)
 	})
 	return accounts, nil
 }
 
-func fetchCodexCredential(req pluginapi.ManagementRequest, explicitOrigin string, account accountInfo) (codexCredential, error) {
-	origin, errOrigin := resolveManagementOrigin(req, explicitOrigin)
-	if errOrigin != nil {
-		return codexCredential{}, errOrigin
-	}
-	authHeader := strings.TrimSpace(req.Headers.Get("Authorization"))
-	if authHeader == "" {
-		return codexCredential{}, httpStatusError{status: http.StatusUnauthorized, msg: "CPA management key is required"}
-	}
+type hostAuthListRequest struct {
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
 
-	path := authFileDownloadPath + "?name=" + url.QueryEscape(account.Name)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	status, raw, errFetch := callLocalManagement(ctx, origin, http.MethodGet, path, authHeader, nil)
-	if errFetch != nil {
-		return codexCredential{}, errFetch
-	}
-	if status != http.StatusOK {
-		return codexCredential{}, httpStatusError{status: http.StatusBadGateway, msg: fmt.Sprintf("failed to download selected Codex credential: status %d", status)}
-	}
+type hostAuthGetRequest struct {
+	pluginapi.HostAuthGetRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
 
-	credential, errCredential := parseCodexCredential(raw)
-	if errCredential != nil {
-		return codexCredential{}, errCredential
+func fetchCodexCredential(req managementRequest, account accountInfo) (codexCredential, error) {
+	if strings.TrimSpace(account.AuthIndex) == "" {
+		return codexCredential{}, fmt.Errorf("auth_index is required")
+	}
+	raw, err := hostCall(pluginabi.MethodHostAuthGet, hostAuthGetRequest{HostAuthGetRequest: pluginapi.HostAuthGetRequest{AuthIndex: account.AuthIndex}, HostCallbackID: req.HostCallbackID})
+	if err != nil {
+		return codexCredential{}, err
+	}
+	var payload pluginapi.HostAuthGetResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return codexCredential{}, fmt.Errorf("decode host.auth.get result")
+	}
+	if payload.AuthIndex != account.AuthIndex {
+		return codexCredential{}, fmt.Errorf("host.auth.get returned a different auth_index")
+	}
+	credential, err := parseCodexCredential(payload.JSON)
+	if err != nil {
+		return codexCredential{}, err
 	}
 	if credential.AccessToken == "" {
 		return codexCredential{}, httpStatusError{status: http.StatusBadRequest, msg: "selected Codex credential does not contain access_token"}
 	}
 	return credential, nil
-}
-
-func resolveManagementOrigin(req pluginapi.ManagementRequest, explicit string) (string, error) {
-	for _, candidate := range []string{
-		explicit,
-		req.Headers.Get(requestManagementOrigin),
-		req.Headers.Get("Origin"),
-	} {
-		origin, errOrigin := normalizeOrigin(candidate)
-		if errOrigin == nil && origin != "" {
-			return origin, nil
-		}
-	}
-	return "", httpStatusError{status: http.StatusBadRequest, msg: "management origin is required"}
-}
-
-func normalizeOrigin(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-	parsed, errParse := url.Parse(raw)
-	if errParse != nil {
-		return "", errParse
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("unsupported origin scheme")
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("origin host is required")
-	}
-	parsed.Path = ""
-	parsed.RawPath = ""
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return strings.TrimRight(parsed.String(), "/"), nil
-}
-
-func callLocalManagement(ctx context.Context, origin, method, path, authorization string, body []byte) (int, []byte, error) {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	req, errRequest := http.NewRequestWithContext(ctx, method, origin+path, bytes.NewReader(body))
-	if errRequest != nil {
-		return 0, nil, errRequest
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", authorization)
-	if len(body) > 0 {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, errDo := http.DefaultClient.Do(req)
-	if errDo != nil {
-		return 0, nil, errDo
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, errRead := readLimited(resp.Body, upstreamBodyLimit)
-	if errRead != nil {
-		return resp.StatusCode, nil, errRead
-	}
-	return resp.StatusCode, raw, nil
 }
 
 func parseCodexCredential(raw []byte) (codexCredential, error) {
@@ -855,15 +861,6 @@ func readLimited(reader io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func firstString(data map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value := stringValue(data[key]); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func nestedString(data map[string]any, path ...string) string {
 	var current any = data
 	for _, key := range path {
@@ -893,22 +890,6 @@ func stringValue(value any) string {
 		return strings.TrimSpace(v.String())
 	default:
 		return ""
-	}
-}
-
-func boolValue(value any) bool {
-	switch v := value.(type) {
-	case bool:
-		return v
-	case string:
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "1", "true", "yes", "on":
-			return true
-		default:
-			return false
-		}
-	default:
-		return false
 	}
 }
 
@@ -1285,7 +1266,6 @@ func renderInvitePage(cfg pluginConfig) string {
         'error.inviteFailed': '邀请请求失败'
       }
     };
-    const origin = window.location.origin;
 
     function normalizeLocale(raw) {
       return String(raw || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
@@ -1398,8 +1378,7 @@ func renderInvitePage(cfg pluginConfig) string {
       if (!key) throw new Error(t('error.managementKeyRequired'));
       const authorization = key.toLowerCase().startsWith('bearer ') ? key : 'Bearer ' + key;
       return {
-        'Authorization': authorization,
-        'X-Codex-Invite-Origin': origin
+        'Authorization': authorization
       };
     }
 
@@ -1527,8 +1506,7 @@ func renderInvitePage(cfg pluginConfig) string {
           originator: settings.originator,
           user_agent: settings.user_agent,
           max_emails_per_request: settings.max_emails_per_request,
-          cookie: field('cookie').value,
-          management_origin: origin
+          cookie: field('cookie').value
         };
         const response = await fetch('/v0/management/codex-invite/invite', {
           method: 'POST',

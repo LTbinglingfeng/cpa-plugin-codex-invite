@@ -33,6 +33,14 @@ jobs:
       - name: Vet
         run: make vet
 
+      - name: Race tests
+        run: go test -race ./...
+
+      - name: Native ABI smoke test
+        run: |
+          make build
+          python3 .github/scripts/native-smoke.py dist/codex-invite.so
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: test
@@ -44,9 +52,11 @@ jobs:
           - goos: linux
             goarch: amd64
             runner: ubuntu-24.04
+            manylinux_image: quay.io/pypa/manylinux2014_x86_64
           - goos: linux
             goarch: arm64
             runner: ubuntu-24.04-arm
+            manylinux_image: quay.io/pypa/manylinux2014_aarch64
           - goos: darwin
             goarch: amd64
             runner: macos-15-intel
@@ -91,7 +101,59 @@ jobs:
           echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
           echo "ARCHIVE_NAME=${PLUGIN_NAME}_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip" >> "${GITHUB_ENV}"
 
+      - name: Build and package Linux plugin (GLIBC 2.17)
+        if: runner.os == 'Linux'
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          MANYLINUX_IMAGE: ${{ matrix.manylinux_image }}
+        run: |
+          set -euo pipefail
+
+          # setup-go lives at a host-only path. Copy the complete toolchain,
+          # then mount it at a stable, read-only path inside manylinux.
+          go_dir="$(mktemp -d "${RUNNER_TEMP}/manylinux-go.XXXXXX")"
+          trap 'rm -rf "$go_dir"' EXIT
+          cp -a "$(go env GOROOT)/." "$go_dir/"
+          chmod -R a+rX "$go_dir"
+
+          # Use the runner UID/GID so artifacts remain writable on the host.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/src" \
+            -v "$go_dir:/opt/go:ro" \
+            -w /src \
+            -e HOME=/tmp \
+            -e GOROOT=/opt/go \
+            -e GOPATH=/tmp/gopath \
+            -e GOCACHE=/tmp/go-build \
+            -e GOTOOLCHAIN=local \
+            -e GOARCH \
+            -e VERSION \
+            -e PLUGIN_NAME \
+            "$MANYLINUX_IMAGE" \
+            bash -euo pipefail -c '
+              # Keep the image PATH (compiler/Python); packaging uses Go,
+              # so it does not depend on the container default Python version.
+              export PATH="/opt/go/bin:${PATH}"
+              make package VERSION="${VERSION}" GOOS=linux GOARCH="${GOARCH}"
+
+              library="dist/${PLUGIN_NAME}.so"
+              glibc_versions="$(readelf --version-info "$library" | sed -n "s/.*Name: GLIBC_\([0-9.]*\).*/\1/p" | sort -Vu)"
+              if [[ -z "$glibc_versions" ]]; then
+                echo "No GLIBC version requirements found in $library" >&2
+                exit 1
+              fi
+              printf "GLIBC versions:\n%s\n" "$glibc_versions"
+              max_glibc="$(printf "%s\n" "$glibc_versions" | tail -n 1)"
+              if [[ "$(printf "2.17\n%s\n" "$max_glibc" | sort -V | tail -n 1)" != "2.17" ]]; then
+                printf "linux %s plugin requires GLIBC_%s, expected GLIBC_2.17 or older\n" "$GOARCH" "$max_glibc" >&2
+                exit 1
+              fi
+              python3 .github/scripts/native-smoke.py "$library"
+            '
+
       - name: Build and package plugin
+        if: runner.os != 'Linux'
         run: make package VERSION="${VERSION}" GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}"
 
       - name: Upload build artifact

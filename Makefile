@@ -1,5 +1,5 @@
 PLUGIN_NAME ?= codex-invite
-VERSION ?= 0.1.4
+VERSION ?= 0.2.0
 BUILD_DIR ?= dist
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
