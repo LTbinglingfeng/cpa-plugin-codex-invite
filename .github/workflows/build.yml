@@ -149,7 +149,7 @@ jobs:
                 printf "linux %s plugin requires GLIBC_%s, expected GLIBC_2.17 or older\n" "$GOARCH" "$max_glibc" >&2
                 exit 1
               fi
-              python3 .github/scripts/native-smoke.py "$library"
+              /opt/python/cp311-cp311/bin/python3 .github/scripts/native-smoke.py "$library"
             '
 
       - name: Build and package plugin
@@ -265,17 +265,21 @@ jobs:
 
       - name: Build FreeBSD shared library
         timeout-minutes: 45
-        uses: go-cross/cgo-actions@v1
-        env:
-          GOFLAGS: -trimpath -buildmode=c-shared
-        with:
-          dir: .
-          packages: .
-          targets: freebsd-amd64
-          out-dir: dist/freebsd-amd64
-          output: ${{ env.PLUGIN_NAME }}.so
-          flags: -ldflags=-s -w
-          x-flags: main.pluginVersion=${{ steps.release_metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # FreeBSD 14.3 moved from the release mirror to the official archive.
+          # Keep the existing ABI baseline and verify its published MANIFEST hash.
+          sysroot="$(mktemp -d "${RUNNER_TEMP}/freebsd-sysroot.XXXXXX")"
+          trap 'rm -rf "$sysroot"' EXIT
+          curl -fL --retry 3 \
+            https://archive.freebsd.org/old-releases/amd64/14.3-RELEASE/base.txz \
+            -o "$sysroot/base.txz"
+          echo "e38b5cf756d60086a6c2f736eff19cc7685f7e2313e31d14342fc8df57200a92  $sysroot/base.txz" | sha256sum -c -
+          tar --no-same-owner -xf "$sysroot/base.txz" -C "$sysroot" ./lib ./usr/lib ./usr/include
+          CGO_ENABLED=1 \
+          CC="clang --target=x86_64-unknown-freebsd14.3 --sysroot=$sysroot" \
+          CGO_LDFLAGS=-fuse-ld=lld \
+            make build VERSION="$VERSION" GOOS=freebsd GOARCH=amd64 BUILD_DIR=dist/freebsd-amd64
 
       - name: Package plugin
         run: |
